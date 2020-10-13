@@ -1,0 +1,12 @@
+.env/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.aws-sam/
+artifacts/
+testResults.xml
+.vscode/
+samconfig.toml
+*.zip
+deploy-template.yaml

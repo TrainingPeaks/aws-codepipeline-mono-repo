@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CodePipeline GitHub MonoRepo S3 backed
+
+Parameters:
+  GitHubWebhookSecret:
+    Type: String
+    Description: GitHub Webhook HMAC Secret
+  
+  ConfigStorageS3BucketName:
+    Type: String
+    Description: S3 bucket name for storage of configuration
+    Default: tools-monorepo-configuration
+
+  ConfigStoragePrefix:
+    Type: String
+    Description: S3 Object Prefix
+    Default: mono-repo/config
+
+  AccountName:
+    Type: String
+    Description: AWS Account Name for prefixing things
+    Default: tools
+
+Globals:
+  Function:
+    Timeout: 300
+    Runtime: python3.8
+    MemorySize: 128
+    Tags:
+      Company: TrainingPeaks
+
+Resources:
+  GitHubWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: webhook/
+      Handler: org.handler
+      Environment:
+        Variables:
+          GITHUB_SECRET: !Ref GitHubWebhookSecret
+          EVAL_FUNCTION_ARN: !GetAtt GitHubEventEvalFunction.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !Sub ${GitHubEventEvalFunction.Arn}
+      Events:
+        GitHubWebhook:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /ghorg/push
+            Method: post
+            PayloadFormatVersion: "2.0"
+    
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 200
+      FailOnWarnings: True
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogs.Arn
+        Format: $context.requestId
+
+  ApiAccessLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/api/GitHubIntegrationS3
+      RetentionInDays: 30
+
+  ConfigStorageBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref ConfigStorageS3BucketName
+
+  GitHubEventEvalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: eval/
+      Handler: filter.handler
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref ConfigStorageBucket
+          S3_PREFIX: !Ref ConfigStoragePrefix
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ConfigStorageBucket
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - codepipeline:StartPipelineExecution
+              Resource: '*'
+
+  MonoRepoS3ConfigCloudFormationResourceFunction:
+    Type: AWS::Serverless::Function 
+    Properties:
+      CodeUri: cfresource
+      Handler: resource.handler
+      Role: !GetAtt MonoRepoResourceS3Role.Arn
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref ConfigStorageBucket
+          S3_PREFIX: !Ref ConfigStoragePrefix
+  
+  MonoRepoResourceS3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: MonoRepoResourceS3Role
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: CloudWatchAccess
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:*
+                  - logs:*
+                Resource: "*"
+        - PolicyName: S3Access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource: !Sub ${ConfigStorageBucket.Arn}/*
+
+Outputs:
+  GitHubWebhookEndpoint:
+    Description: GitHub webhook endpoint URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/ghorg/push"
+  HttpApiId:
+    Description: API Id
+    Value: !Ref HttpApi
+  MonoRepoResourceS3Role:
+    Description: Role ARN for S3 CF resource
+    Value: !GetAtt MonoRepoResourceS3Role.Arn
+    Export:
+      Name: !Sub ${AccountName}-MonoRepoTriggerRole
+  MonoRepoS3ConfigCloudFormationResourceFunction:
+    Description: Role ARN for mono repo cloud formation s3 config function
+    Value: !GetAtt MonoRepoS3ConfigCloudFormationResourceFunction.Arn
+    Export:
+      Name: !Sub ${AccountName}-MonoRepoTrigger

@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: A CodePipeline MonoRepo GitHub Filter
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Description: GitHub repository name the function operates on
+
+  GitHubBranch:
+    Type: String
+    Default: master
+    Description: GitHub branch the function operates on. Must match the CodePipeline source branch
+  
+  ChangeMatchExpressions:
+    Type: String
+    Description: Commas separated list of Python regex to match on repo changes. Any match starts the pipeline.
+
+  CodePipelineName:
+    Type: String
+    Description: The name of the CodePipeline to start
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.8
+    Tags:
+      Company: TrainingPeaks
+
+Resources:
+  FilterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: github/
+      Handler: filter.handler
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - codepipeline:StartPipelineExecution
+              Resource:
+                - "*"
+      Environment:
+        Variables:
+          GITHUB_BRANCH: !Ref GitHubBranch
+          CODE_PIPELINE_NAME: !Ref CodePipelineName
+          CHANGE_MATCH_LIST: !Ref ChangeMatchExpressions
+      Tags:
+        Github-Webhook-Filter: "1"
+        GitHubRepo: !Ref GitHubRepo
+    
+
+Outputs:
+  FilterFunction:
+    Value: !GetAtt FilterFunction.Arn
